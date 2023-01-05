@@ -7,6 +7,7 @@ edition = "2021"
 aya-bpf = { git = "https://github.com/aya-rs/aya", branch = "main" }
 aya-log-ebpf = { git = "https://github.com/aya-rs/aya", branch = "main" }
 ebpf-demo-common = { path = "../ebpf-demo-common" }
+memoffset = "0.6"
 
 [[bin]]
 name = "ebpf-demo"
