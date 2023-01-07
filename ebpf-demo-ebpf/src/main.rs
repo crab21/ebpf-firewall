@@ -14,14 +14,17 @@ use aya_bpf::{
 mod bindings;
 use aya_log_ebpf::{debug, error, info};
 use bindings::{ethhdr, iphdr, tcphdr};
-use core::{borrow::BorrowMut, mem};
+use core::{borrow::BorrowMut, mem, u8};
 use ebpf_demo_common::PacketLog;
 use memoffset::offset_of;
+
+use crate::bindings::arphdr;
 
 const IPPROTO_UDP: u8 = 0x0011;
 const IPPROTO_TCP: u8 = 6;
 const IPPROTO_ICMP: u8 = 1;
 const ETH_P_IP: u16 = 0x0800;
+const ETH_P_ARP: u16 = 0x0806;
 const AF_INET: u16 = 2;
 const AF_INET6: u16 = 10;
 
@@ -63,9 +66,9 @@ fn ptr_at_mut<T>(ctx: &XdpContext, offset: usize) -> Option<*mut T> {
 // =======================
 #[map(name = "EVENTS")] //
 static mut EVENTS: PerfEventArray<PacketLog> =
-    PerfEventArray::<PacketLog>::with_max_entries(1024, 0);
+    PerfEventArray::<PacketLog>::with_max_entries(256, 0);
 #[map(name = "BLOCKLIST")] //
-static mut BLOCKLIST: HashMap<u32, u32> = HashMap::<u32, u32>::with_max_entries(1024, 0);
+static mut BLOCKLIST: HashMap<u32, u32> = HashMap::<u32, u32>::with_max_entries(512, 0);
 
 fn block_ip(address: u32) -> bool {
     unsafe { BLOCKLIST.get(&address).is_some() }
@@ -79,8 +82,8 @@ fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, &'static str> {
     });
 
     if h_proto != ETH_P_IP {
-        info!(&ctx, "drop {}", h_proto);
-        return Ok(xdp_action::XDP_DROP);
+        // info!(&ctx, "drop {}", h_proto);
+        return Ok(xdp_action::XDP_PASS);
     }
 
     let ip_dest = u16::from_be(unsafe {
@@ -114,6 +117,7 @@ fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, &'static str> {
             &ctx,
             &ctx, "not tcp: {} source: {}, dest:{}", ip_proto, ip_source, ip_dest
         );
+        // TODO: drop
         action = xdp_action::XDP_DROP;
         // save_events(ctx, source, action);
         return Ok(xdp_action::XDP_DROP);
@@ -127,24 +131,28 @@ fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, &'static str> {
         return Ok(xdp_action::XDP_PASS);
     }
 
-    action = if (block_ip(source) || block_ip(destaddr)) {
+    action = if (block_ip(source) || block_ip(destaddr) || (ip_dest >= 31024 && ip_dest <= 65000)) {
         xdp_action::XDP_PASS
     } else {
+        // TODO: drop
+
         xdp_action::XDP_DROP
     };
-
-    if (ip_dest >= 1445 && ip_dest <= 1460) || (ip_dest >= 31024 && ip_dest <= 65000) {
-        action = xdp_action::XDP_PASS;
+    // save_events(
+    //     &ctx,
+    //     source,
+    //     ip_source as u32,
+    //     destaddr,
+    //     ip_dest as u32,
+    //     action,
+    // );
+    if action != xdp_action::XDP_PASS {
+        return Ok(action);
     }
 
-    save_events(
-        ctx,
-        source,
-        ip_source as u32,
-        destaddr,
-        ip_dest as u32,
-        action,
-    );
+    if (ip_dest >= 1445 && ip_dest <= 1460) {
+        action = xdp_action::XDP_PASS;
+    }
 
     return Ok(action);
 }
@@ -164,7 +172,7 @@ unsafe fn ptr_at_result<T>(ctx: &XdpContext, offset: usize) -> Result<*const T, 
 }
 
 fn save_events(
-    ctx: XdpContext,
+    ctx: &XdpContext,
     source: u32,
     source_port: u32,
     dst_addr: u32,
@@ -178,8 +186,8 @@ fn save_events(
         dest_port: d_port,
         action: action,
     };
-    // unsafe {
-    //     EVENTS.output(&ctx, &log_entry, 0); //
-    // }
-    info!(&ctx, "{}-->{}", source_port, d_port);
+    unsafe {
+        EVENTS.output(ctx, &log_entry, 0); //
+    }
+    // info!(ctx, "{}-->{}", source_port, d_port);
 }

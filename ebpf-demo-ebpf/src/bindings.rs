@@ -334,3 +334,12 @@ pub struct udphdr {
     pub len: __be16,
     pub check: __sum16,
 }
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct arphdr {
+    pub ar_hrd: __be16,
+    pub ar_pro: __be16,
+    pub ar_hln: ::aya_bpf::cty::c_uchar,
+    pub ar_pln: ::aya_bpf::cty::c_uchar,
+    pub ar_op: __be16,
+}
