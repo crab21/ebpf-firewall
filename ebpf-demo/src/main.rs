@@ -62,6 +62,15 @@ async fn main() -> Result<(), anyhow::Error> {
         blocklist.insert(tmpp, 0, 0)?;
         info!("ip_white: {:?}", v);
     }
+    // ******************dns ip **********************
+    let dns_vec: Vec<String> = vec!["1.1.1.1".to_string(), "8.8.8.8".to_string()];
+    let mut dns_ips: HashMap<_, u32, u32> = HashMap::try_from(bpf.map_mut("BLOCKLIST_DNS")?)?;
+    for vv in dns_vec {
+        let v = vv.trim();
+        let tmp: Result<Ipv4Addr, _> = v.parse();
+        let tmpp = tmp.unwrap().try_into()?;
+        dns_ips.insert(tmpp, 0, 0)?;
+    }
 
     let mut perf_array = AsyncPerfEventArray::try_from(bpf.map_mut("EVENTS")?)?;
 
