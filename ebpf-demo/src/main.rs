@@ -50,59 +50,6 @@ async fn main() -> Result<(), anyhow::Error> {
     program.attach(&opt.iface, XdpFlags::SKB_MODE)
         .context("failed to attach the XDP program with default flags - try changing XdpFlags::default() to XdpFlags::SKB_MODE")?;
 
-    // tokio================>
-    let mut blocklist: HashMap<_, u32, u32> = HashMap::try_from(bpf.map_mut("BLOCKLIST")?)?;
-
-    //
-    let ip_ww: Vec<String> = read_from_file();
-    for vv in ip_ww {
-        let v = vv.trim();
-        let tmp: Result<Ipv4Addr, _> = v.parse();
-        let tmpp = tmp.unwrap().try_into()?;
-        blocklist.insert(tmpp, 0, 0)?;
-        info!("ip_white: {:?}", v);
-    }
-
-    let mut perf_array = AsyncPerfEventArray::try_from(bpf.map_mut("EVENTS")?)?;
-
-    for cpu_id in online_cpus()? {
-        //
-
-        let mut buf = perf_array.open(cpu_id, None)?;
-
-        //
-
-        task::spawn(async move {
-            //
-            let mut buffers = (0..10)
-                .map(|_| BytesMut::with_capacity(256))
-                .collect::<Vec<_>>();
-            loop {
-                //
-                let events = buf.read_events(&mut buffers).await.unwrap();
-                for i in 0..events.read {
-                    let buf = &mut buffers[i];
-                    let ptr = buf.as_ptr() as *const PacketLog;
-                    //
-
-                    let data = unsafe { ptr.read_unaligned() };
-                    let src_addr = net::Ipv4Addr::from(data.ipv4_address);
-                    let dst_addr = net::Ipv4Addr::from(data.dest_address);
-                    //
-                    if data.action == 1 {
-                        info!(
-                            "LOG: SRC {}-{} dst {}-{}, ACTION {}",
-                            src_addr, data.source_port, dst_addr, data.dest_port, data.action
-                        );
-                    }
-                }
-                buffers = (0..10)
-                    .map(|_| BytesMut::with_capacity(256))
-                    .collect::<Vec<_>>();
-            }
-        });
-    }
-
     signal::ctrl_c().await.expect("failed to listen for event");
     Ok::<_, anyhow::Error>(())
     // info!("Waiting for Ctrl-C...");
@@ -110,25 +57,4 @@ async fn main() -> Result<(), anyhow::Error> {
     // info!("Exiting...");
 
     // Ok(())
-}
-
-fn read_from_file() -> Vec<String> {
-    let mut vc: Vec<String> = vec::Vec::new();
-    if let Ok(lines) = read_lines("/root/ip_white") {
-        for line in lines {
-            if let Ok(ip) = line {
-                let iip = ip.clone();
-                vc.insert(0, iip);
-            }
-        }
-    }
-    vc
-}
-
-fn read_lines<P>(filename: P) -> io::Result<io::Lines<io::BufReader<File>>>
-where
-    P: AsRef<Path>,
-{
-    let file = File::open(filename)?;
-    Ok(io::BufReader::new(file).lines())
 }
