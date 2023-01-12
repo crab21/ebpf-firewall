@@ -280,6 +280,32 @@ fn try_xdp_tcp_filter(ctx: &XdpContext) -> Result<u32, &'static str> {
         return Ok(xdp_action::XDP_PASS);
     }
 
+    // drop `RST` package
+    let tcphdr_st = tcphdr::from(unsafe { *ptr_at_result(ctx, ETH_HDR_LEN + IP_HDR_LEN)? });
+    let urg = tcphdr_st.urg();
+    let ack = tcphdr_st.ack();
+    let psh = tcphdr_st.psh();
+    let rst = tcphdr_st.rst();
+    let syn = tcphdr_st.syn();
+    let fin = tcphdr_st.fin();
+    info!(
+        ctx,
+        "urg:{} ack:{} psh:{} rst:{} syn: {} fin:{}", urg, ack, psh, rst, syn, fin
+    );
+    let window_size = u16::from_be(unsafe { *ptr_at_result(ctx, ETH_HDR_LEN + IP_HDR_LEN + 14)? });
+    info!(ctx, "window_size------------------>{}", window_size);
+
+    let tcphdr_st_manual =
+        u8::from_be(unsafe { *ptr_at_result(ctx, ETH_HDR_LEN + IP_HDR_LEN + 13)? });
+    info!(ctx, "manual------------------>{}", tcphdr_st_manual);
+
+    let ip_flags = u8::from_be(unsafe { *ptr_at_result(ctx, ETH_HDR_LEN + 6)? });
+
+    // tcp [URG、ACK、PSH、RST、SYN、FIN] check
+    if try_xdp_tcp_flags_filter(ctx,tcphdr_st_manual, window_size, ip_flags) == xdp_action::XDP_DROP {
+        return Ok(xdp_action::XDP_DROP);
+    }
+
     // ********* only dns udp 53/5353
     if block_dns_ip(source_ip) {
         return Ok(xdp_action::XDP_PASS);
@@ -326,4 +352,70 @@ unsafe fn ptr_at<U>(addr: usize) -> Result<*const U, &'static str> {
 #[inline]
 unsafe fn ptr_after<T, U>(prev: *const T) -> Result<*const U, &'static str> {
     ptr_at(prev as usize + mem::size_of::<T>())
+}
+
+fn try_xdp_tcp_flags_filter(ctx: &XdpContext,tcphdr_st_manual: u8, window_size: u16, ip_flags: u8) -> u32 {
+    //全为1
+    if tcphdr_st_manual & 0b0011_1111 == 0b0011_1111 {
+        return xdp_action::XDP_DROP;
+    }
+    //全为0
+    if tcphdr_st_manual | 0b0000_0000 == 0b0000_0000 {
+        return xdp_action::XDP_DROP;
+    }
+
+    // syn fin ->1
+    if tcphdr_st_manual & 0b0000_0011 == 0b0000_0011 {
+        return xdp_action::XDP_DROP;
+    }
+
+    // syn rst ->1
+    if tcphdr_st_manual & 0b0000_0110 == 0b0000_0110 {
+        return xdp_action::XDP_DROP;
+    }
+
+    // fin rst ->1
+    if tcphdr_st_manual & 0b0000_0101 == 0b0000_0101 {
+        return xdp_action::XDP_DROP;
+    }
+
+    // psh fin urg ->1
+    if tcphdr_st_manual & 0b0010_1001 == 0b0010_1001 {
+        return xdp_action::XDP_DROP;
+    }
+    // **only fin ->1
+    if tcphdr_st_manual | 0b0000_0001 == 0b0000_0001 {
+        return xdp_action::XDP_DROP;
+    }
+    // **only urg->1
+    if tcphdr_st_manual | 0b0010_0000 == 0b0010_0000 {
+        return xdp_action::XDP_DROP;
+    }
+
+    // **only psh ->1
+    if tcphdr_st_manual | 0b0000_1000 == 0b0000_1000 {
+        return xdp_action::XDP_DROP;
+    }
+
+    // **flow syn attack
+    if tcphdr_st_manual | 0b0000_0010 == 0b0000_0010 && window_size == 0 {
+        return xdp_action::XDP_DROP;
+    }
+
+    // **syn rst fin && window_size > 0
+    // syn/rst/fin ==1 && 分片报文
+    if tcphdr_st_manual & 0b0000_0100 == 0b0000_0100 && (ip_flags & 0b0010_0000 == 0b0010_0000) {
+        info!(ctx, "tcphdr_st_manual:{} reject ip_flags------------------>{}",tcphdr_st_manual, ip_flags);
+        return xdp_action::XDP_DROP;
+    }
+    if tcphdr_st_manual & 0b0000_0001 == 0b0000_0001 && (ip_flags & 0b0010_0000 == 0b0010_0000) {
+        info!(ctx, "tcphdr_st_manual:{} reject ip_flags------------------>{}",tcphdr_st_manual, ip_flags);
+        return xdp_action::XDP_DROP;
+    }
+    if tcphdr_st_manual & 0b0000_0010 == 0b0000_0010 && (ip_flags & 0b0010_0000 == 0b0010_0000) {
+        info!(ctx, "tcphdr_st_manual:{} reject ip_flags------------------>{}",tcphdr_st_manual, ip_flags);
+        return xdp_action::XDP_DROP;
+    }
+
+    xdp_action::XDP_PASS
 }
