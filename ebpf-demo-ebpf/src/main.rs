@@ -232,12 +232,12 @@ fn try_xdp_udp_filter(ctx: &XdpContext) -> Result<u32, &'static str> {
     });
     // if flag is 0x40(don't fragment)
     if ip_frag_off == 0x0040 {
-        info!(ctx,"don't fragment: {}",ip_frag_off);
+        info!(ctx, "don't fragment: {}", ip_frag_off);
         return Ok(xdp_action::XDP_DROP);
     }
     // drop if dns flag has Authoritative mark
     if (data_flags[2] & 0b0000_0100) != 0 {
-        info!(ctx,"Authoritative mark:{}",data_flags[2]);
+        info!(ctx, "Authoritative mark:{}", data_flags[2]);
         return Ok(xdp_action::XDP_DROP);
     }
     // ****************** dns 防止污染 *********************end<<<<
@@ -282,7 +282,15 @@ fn try_xdp_tcp_filter(ctx: &XdpContext) -> Result<u32, &'static str> {
         return Ok(xdp_action::XDP_PASS);
     }
 
-    // drop `RST` package
+    // ********* only dns udp 53/5353
+    if block_dns_ip(source_ip) {
+        return Ok(xdp_action::XDP_PASS);
+    }
+    if tcp_source_port == 53 || tcp_source_port == 5353 {
+        return Ok(xdp_action::XDP_PASS);
+    }
+
+        // drop `RST` package
     // let tcphdr_st = tcphdr::from(unsafe { *ptr_at_result(ctx, ETH_HDR_LEN + IP_HDR_LEN)? });
     // let urg = tcphdr_st.urg();
     // let ack = tcphdr_st.ack();
@@ -304,47 +312,51 @@ fn try_xdp_tcp_filter(ctx: &XdpContext) -> Result<u32, &'static str> {
     let ip_flags = u8::from_be(unsafe { *ptr_at_result(ctx, ETH_HDR_LEN + 6)? });
 
     // tcp [URG、ACK、PSH、RST、SYN、FIN] check
-    if try_xdp_tcp_flags_filter(ctx,tcphdr_st_manual, window_size, ip_flags) == xdp_action::XDP_DROP {
-        info!(ctx,"tcphdr_st_manual:{} window_size:{} ip_flags:{}",tcphdr_st_manual,window_size,ip_flags);
+    if try_xdp_tcp_flags_filter(ctx, tcphdr_st_manual, window_size, ip_flags)
+        == xdp_action::XDP_DROP
+    {
+        info!(
+            ctx,
+            "tcphdr_st_manual:{} window_size:{} ip_flags:{}",
+            tcphdr_st_manual,
+            window_size,
+            ip_flags
+        );
         return Ok(xdp_action::XDP_DROP);
     }
 
-    // ********* only dns udp 53/5353
-    if block_dns_ip(source_ip) {
-        return Ok(xdp_action::XDP_PASS);
-    }
-    if tcp_source_port == 53 || tcp_source_port == 5353 {
-        return Ok(xdp_action::XDP_PASS);
-    }
 
     if block_ip(dest_ip) {
         return Ok(xdp_action::XDP_PASS);
     }
 
-    let action = if (block_ip(source_ip) || (tcp_dest_port >= 31024 && tcp_dest_port <= 65000)) {
-        xdp_action::XDP_PASS
-    } else {
-        // TODO: drop
-        let dest_ip =
-            u32::from_be(unsafe { *ptr_at_result(ctx, ETH_HDR_LEN + offset_of!(iphdr, daddr))? });
+    if block_ip(source_ip) {
+        return Ok(xdp_action::XDP_PASS);
+    }
 
-        save_events(
-            ctx,
-            source_ip,
-            tcp_source_port as u32,
-            dest_ip,
-            tcp_dest_port as u32,
-            xdp_action::XDP_DROP,
-        );
+    if tcp_dest_port >= 31024 && tcp_dest_port <= 65000 {
+        return Ok(xdp_action::XDP_PASS);
+    }
 
-        info!(
-            ctx,
-            "drop sourceport:{} destport:{}", tcp_source_port, tcp_dest_port
-        );
-        xdp_action::XDP_DROP
-    };
+    // TODO: drop
+    let dest_ip =
+        u32::from_be(unsafe { *ptr_at_result(ctx, ETH_HDR_LEN + offset_of!(iphdr, daddr))? });
 
-    return Ok(action);
+    save_events(
+        ctx,
+        source_ip,
+        tcp_source_port as u32,
+        dest_ip,
+        tcp_dest_port as u32,
+        xdp_action::XDP_DROP,
+    );
+
+    info!(
+        ctx,
+        "drop sourceport:{} destport:{}", tcp_source_port, tcp_dest_port
+    );
+
+    return Ok(xdp_action::XDP_DROP);
 }
 
 #[inline]
@@ -357,7 +369,12 @@ unsafe fn ptr_after<T, U>(prev: *const T) -> Result<*const U, &'static str> {
     ptr_at(prev as usize + mem::size_of::<T>())
 }
 
-fn try_xdp_tcp_flags_filter(ctx: &XdpContext,tcphdr_st_manual: u8, window_size: u16, ip_flags: u8) -> u32 {
+fn try_xdp_tcp_flags_filter(
+    ctx: &XdpContext,
+    tcphdr_st_manual: u8,
+    window_size: u16,
+    ip_flags: u8,
+) -> u32 {
     //全为1
     if tcphdr_st_manual & 0b0011_1111 == 0b0011_1111 {
         return xdp_action::XDP_DROP;
@@ -367,43 +384,43 @@ fn try_xdp_tcp_flags_filter(ctx: &XdpContext,tcphdr_st_manual: u8, window_size: 
         return xdp_action::XDP_DROP;
     }
 
-    // syn fin ->1
-    if tcphdr_st_manual & 0b0000_0011 == 0b0000_0011 {
-        return xdp_action::XDP_DROP;
-    }
+    // // syn fin ->1
+    // if tcphdr_st_manual & 0b0000_0011 == 0b0000_0011 {
+    //     return xdp_action::XDP_DROP;
+    // }
 
     // syn rst ->1
     if tcphdr_st_manual & 0b0000_0110 == 0b0000_0110 {
         return xdp_action::XDP_DROP;
     }
 
-    // fin rst ->1
-    if tcphdr_st_manual & 0b0000_0101 == 0b0000_0101 {
-        return xdp_action::XDP_DROP;
-    }
+    // // fin rst ->1
+    // if tcphdr_st_manual & 0b0000_0101 == 0b0000_0101 {
+    //     return xdp_action::XDP_DROP;
+    // }
 
-    // psh fin urg ->1
-    if tcphdr_st_manual & 0b0010_1001 == 0b0010_1001 {
-        return xdp_action::XDP_DROP;
-    }
-    // **only fin ->1
-    if tcphdr_st_manual | 0b0000_0001 == 0b0000_0001 {
-        return xdp_action::XDP_DROP;
-    }
+    // // psh fin urg ->1
+    // if tcphdr_st_manual & 0b0010_1001 == 0b0010_1001 {
+    //     return xdp_action::XDP_DROP;
+    // }
+    // // **only fin ->1
+    // if tcphdr_st_manual | 0b0000_0001 == 0b0000_0001 {
+    //     return xdp_action::XDP_DROP;
+    // }
     // **only urg->1
     if tcphdr_st_manual | 0b0010_0000 == 0b0010_0000 {
         return xdp_action::XDP_DROP;
     }
 
-    // **only psh ->1
-    if tcphdr_st_manual | 0b0000_1000 == 0b0000_1000 {
-        return xdp_action::XDP_DROP;
-    }
+    // // **only psh ->1
+    // if tcphdr_st_manual | 0b0000_1000 == 0b0000_1000 {
+    //     return xdp_action::XDP_DROP;
+    // }
 
-    // **flow syn attack
-    if tcphdr_st_manual | 0b0000_0010 == 0b0000_0010 && window_size == 0 {
-        return xdp_action::XDP_DROP;
-    }
+    // // **flow syn attack
+    // if tcphdr_st_manual | 0b0000_0010 == 0b0000_0010 && window_size == 0 {
+    //     return xdp_action::XDP_DROP;
+    // }
 
     // // **syn rst fin && window_size > 0
     // // syn/rst/fin ==1 && 分片报文
