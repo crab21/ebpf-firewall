@@ -11,10 +11,7 @@ use aya_bpf::{
     maps::{HashMap, PerfEventArray},
     programs::XdpContext,
 };
-use aya_bpf::{
-    bindings::{sk_action, xdp_action::XDP_DROP},
-    programs::xdp,
-};
+use aya_bpf::{bindings::xdp_action::XDP_DROP, programs::xdp};
 mod bindings;
 use aya_log_ebpf::{debug, error, info};
 use bindings::{ethhdr, iphdr, tcphdr};
@@ -82,13 +79,19 @@ static mut EVENTS: PerfEventArray<PacketLog> =
 static mut BLOCKLIST_DNS: HashMap<u32, u32> = HashMap::<u32, u32>::with_max_entries(16, 0);
 
 #[map(name = "BLOCKLIST")] //
-static mut BLOCKLIST: HashMap<u32, u32> = HashMap::<u32, u32>::with_max_entries(512, 0);
+static mut BLOCKLIST: HashMap<u32, u32> = HashMap::<u32, u32>::with_max_entries(5120, 0);
+
+#[map(name = "CONFIG")] //
+static mut CONFIG: HashMap<u32, u32> = HashMap::<u32, u32>::with_max_entries(12, 0);
 
 fn block_ip(address: u32) -> bool {
     unsafe { BLOCKLIST.get(&address).is_some() }
 }
 fn block_dns_ip(address: u32) -> bool {
     unsafe { BLOCKLIST_DNS.get(&address).is_some() }
+}
+fn config_info(address: u32) -> bool {
+    unsafe { CONFIG.get(&address).is_some() }
 }
 
 fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, &'static str> {
@@ -188,6 +191,12 @@ fn try_xdp_udp_filter(ctx: &XdpContext) -> Result<u32, &'static str> {
     if ip_proto != IPPROTO_UDP {
         return Ok(xdp_action::XDP_ABORTED);
     }
+    let udp_enable = config_info(0u32.try_into().unwrap());
+    if udp_enable {
+        info!(ctx, "udp pass: {}", "-------------->drop udp");
+        return Ok(xdp_action::XDP_DROP);
+    }
+
     let udp_source_port = u16::from_be(unsafe {
         *ptr_at_result(ctx, ETH_HDR_LEN + IP_HDR_LEN + offset_of!(udphdr, source))?
         //
@@ -290,7 +299,7 @@ fn try_xdp_tcp_filter(ctx: &XdpContext) -> Result<u32, &'static str> {
         return Ok(xdp_action::XDP_PASS);
     }
 
-        // drop `RST` package
+    // drop `RST` package
     // let tcphdr_st = tcphdr::from(unsafe { *ptr_at_result(ctx, ETH_HDR_LEN + IP_HDR_LEN)? });
     // let urg = tcphdr_st.urg();
     // let ack = tcphdr_st.ack();
@@ -325,7 +334,6 @@ fn try_xdp_tcp_filter(ctx: &XdpContext) -> Result<u32, &'static str> {
         return Ok(xdp_action::XDP_DROP);
     }
 
-
     if block_ip(dest_ip) {
         return Ok(xdp_action::XDP_PASS);
     }
@@ -338,18 +346,18 @@ fn try_xdp_tcp_filter(ctx: &XdpContext) -> Result<u32, &'static str> {
         return Ok(xdp_action::XDP_PASS);
     }
 
-    // TODO: drop
-    let dest_ip =
-        u32::from_be(unsafe { *ptr_at_result(ctx, ETH_HDR_LEN + offset_of!(iphdr, daddr))? });
+    // // TODO: drop
+    // let dest_ip =
+    //     u32::from_be(unsafe { *ptr_at_result(ctx, ETH_HDR_LEN + offset_of!(iphdr, daddr))? });
 
-    save_events(
-        ctx,
-        source_ip,
-        tcp_source_port as u32,
-        dest_ip,
-        tcp_dest_port as u32,
-        xdp_action::XDP_DROP,
-    );
+    // save_events(
+    //     ctx,
+    //     source_ip,
+    //     tcp_source_port as u32,
+    //     dest_ip,
+    //     tcp_dest_port as u32,
+    //     xdp_action::XDP_DROP,
+    // );
 
     info!(
         ctx,
@@ -384,38 +392,38 @@ fn try_xdp_tcp_flags_filter(
         return xdp_action::XDP_DROP;
     }
 
-    // // syn fin ->1
-    // if tcphdr_st_manual & 0b0000_0011 == 0b0000_0011 {
-    //     return xdp_action::XDP_DROP;
-    // }
+    // syn fin ->1
+    if tcphdr_st_manual & 0b0000_0011 == 0b0000_0011 {
+        return xdp_action::XDP_DROP;
+    }
 
     // syn rst ->1
     if tcphdr_st_manual & 0b0000_0110 == 0b0000_0110 {
         return xdp_action::XDP_DROP;
     }
 
-    // // fin rst ->1
-    // if tcphdr_st_manual & 0b0000_0101 == 0b0000_0101 {
-    //     return xdp_action::XDP_DROP;
-    // }
+    // fin rst ->1
+    if tcphdr_st_manual & 0b0000_0101 == 0b0000_0101 {
+        return xdp_action::XDP_DROP;
+    }
 
-    // // psh fin urg ->1
-    // if tcphdr_st_manual & 0b0010_1001 == 0b0010_1001 {
-    //     return xdp_action::XDP_DROP;
-    // }
-    // // **only fin ->1
-    // if tcphdr_st_manual | 0b0000_0001 == 0b0000_0001 {
-    //     return xdp_action::XDP_DROP;
-    // }
+    // psh fin urg ->1
+    if tcphdr_st_manual & 0b0010_1001 == 0b0010_1001 {
+        return xdp_action::XDP_DROP;
+    }
+    // **only fin ->1
+    if tcphdr_st_manual | 0b0000_0001 == 0b0000_0001 {
+        return xdp_action::XDP_DROP;
+    }
     // **only urg->1
     if tcphdr_st_manual | 0b0010_0000 == 0b0010_0000 {
         return xdp_action::XDP_DROP;
     }
 
-    // // **only psh ->1
-    // if tcphdr_st_manual | 0b0000_1000 == 0b0000_1000 {
-    //     return xdp_action::XDP_DROP;
-    // }
+    // **only psh ->1
+    if tcphdr_st_manual | 0b0000_1000 == 0b0000_1000 {
+        return xdp_action::XDP_DROP;
+    }
 
     // // **flow syn attack
     // if tcphdr_st_manual | 0b0000_0010 == 0b0000_0010 && window_size == 0 {

@@ -21,6 +21,8 @@ use tokio::{signal, task};
 struct Opt {
     #[clap(short, long, default_value = "eth0")]
     iface: String,
+    #[arg(short, long, default_value = "false")]
+    udp_disable: bool,
 }
 
 #[tokio::main]
@@ -50,6 +52,14 @@ async fn main() -> Result<(), anyhow::Error> {
     program.attach(&opt.iface, XdpFlags::SKB_MODE)
         .context("failed to attach the XDP program with default flags - try changing XdpFlags::default() to XdpFlags::SKB_MODE")?;
 
+    let mut config: HashMap<_, u32, u32> = HashMap::try_from(bpf.map_mut("CONFIG")?)?;
+
+    if opt.udp_disable {
+        info!("===============> disable udp <==============");
+        let u = 0u32.try_into()?;
+        config.insert(u, 0, 0)?;
+    }
+
     // tokio================>
     let mut blocklist: HashMap<_, u32, u32> = HashMap::try_from(bpf.map_mut("BLOCKLIST")?)?;
 
@@ -63,7 +73,13 @@ async fn main() -> Result<(), anyhow::Error> {
         info!("ip_white: {:?}", v);
     }
     // ******************dns ip **********************
-    let dns_vec: Vec<String> = vec!["1.1.1.1".to_string(), "8.8.8.8".to_string()];
+    let dns_vec: Vec<String> = vec![
+        "1.1.1.1".to_string(),
+        "1.1.1.2".to_string(),
+        "1.0.0.1".to_string(),
+        "8.8.8.8".to_string(),
+        "8.8.4.4".to_string(),
+    ];
     let mut dns_ips: HashMap<_, u32, u32> = HashMap::try_from(bpf.map_mut("BLOCKLIST_DNS")?)?;
     for vv in dns_vec {
         let v = vv.trim();
