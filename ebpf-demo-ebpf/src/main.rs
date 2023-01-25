@@ -392,10 +392,10 @@ fn try_xdp_tcp_flags_filter(
         return xdp_action::XDP_DROP;
     }
 
-    // syn fin ->1
-    if tcphdr_st_manual & 0b0000_0011 == 0b0000_0011 {
-        return xdp_action::XDP_DROP;
-    }
+    // // syn fin ->1
+    // if tcphdr_st_manual & 0b0000_0011 == 0b0000_0011 {
+    //     return xdp_action::XDP_DROP;
+    // }
 
     // syn rst ->1
     if tcphdr_st_manual & 0b0000_0110 == 0b0000_0110 {
@@ -411,19 +411,19 @@ fn try_xdp_tcp_flags_filter(
     if tcphdr_st_manual & 0b0010_1001 == 0b0010_1001 {
         return xdp_action::XDP_DROP;
     }
-    // **only fin ->1
-    if tcphdr_st_manual | 0b0000_0001 == 0b0000_0001 {
-        return xdp_action::XDP_DROP;
-    }
+    // // **only fin ->1
+    // if tcphdr_st_manual | 0b0000_0001 == 0b0000_0001 {
+    //     return xdp_action::XDP_DROP;
+    // }
     // **only urg->1
     if tcphdr_st_manual | 0b0010_0000 == 0b0010_0000 {
         return xdp_action::XDP_DROP;
     }
 
-    // **only psh ->1
-    if tcphdr_st_manual | 0b0000_1000 == 0b0000_1000 {
-        return xdp_action::XDP_DROP;
-    }
+    // // **only psh ->1
+    // if tcphdr_st_manual | 0b0000_1000 == 0b0000_1000 {
+    //     return xdp_action::XDP_DROP;
+    // }
 
     // // **flow syn attack
     // if tcphdr_st_manual | 0b0000_0010 == 0b0000_0010 && window_size == 0 {
