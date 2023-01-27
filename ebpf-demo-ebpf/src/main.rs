@@ -73,10 +73,8 @@ fn ptr_at_mut<T>(ctx: &XdpContext, offset: usize) -> Option<*mut T> {
 // =======================
 #[map(name = "EVENTS")] //
 static mut EVENTS: PerfEventArray<PacketLog> =
-    PerfEventArray::<PacketLog>::with_max_entries(256, 0);
+    PerfEventArray::<PacketLog>::with_max_entries(2560, 0);
 
-#[map(name = "BLOCKLIST_DNS")] //
-static mut BLOCKLIST_DNS: HashMap<u32, u32> = HashMap::<u32, u32>::with_max_entries(16, 0);
 
 #[map(name = "BLOCKLIST")] //
 static mut BLOCKLIST: HashMap<u32, u32> = HashMap::<u32, u32>::with_max_entries(5120, 0);
@@ -88,7 +86,7 @@ fn block_ip(address: u32) -> bool {
     unsafe { BLOCKLIST.get(&address).is_some() }
 }
 fn block_dns_ip(address: u32) -> bool {
-    unsafe { BLOCKLIST_DNS.get(&address).is_some() }
+    block_ip(address)
 }
 fn config_info(address: u32) -> bool {
     unsafe { CONFIG.get(&address).is_some() }
@@ -244,18 +242,20 @@ fn try_xdp_udp_filter(ctx: &XdpContext) -> Result<u32, &'static str> {
         info!(ctx, "don't fragment: {}", ip_frag_off);
         return Ok(xdp_action::XDP_DROP);
     }
-    // drop if dns flag has Authoritative mark
-    if (data_flags[2] & 0b0000_0100) != 0 {
-        info!(ctx, "Authoritative mark:{}", data_flags[2]);
-        return Ok(xdp_action::XDP_DROP);
-    }
+    // // drop if dns flag has Authoritative mark
+    // if (data_flags[2] & 0b0000_0100) != 0 {
+    //     info!(ctx, "Authoritative mark:{}", data_flags[2]);
+    //     return Ok(xdp_action::XDP_DROP);
+    // }
     // ****************** dns 防止污染 *********************end<<<<
 
     let source_ip =
         u32::from_be(unsafe { *ptr_at_result(ctx, ETH_HDR_LEN + offset_of!(iphdr, saddr))? });
+    let target_ip =
+        u32::from_be(unsafe { *ptr_at_result(ctx, ETH_HDR_LEN + offset_of!(iphdr, daddr))? });
 
     // ********* only dns udp 53/5353
-    if block_dns_ip(source_ip) {
+    if block_dns_ip(source_ip) || block_dns_ip(target_ip){
         return Ok(xdp_action::XDP_PASS);
     }
 
@@ -342,22 +342,23 @@ fn try_xdp_tcp_filter(ctx: &XdpContext) -> Result<u32, &'static str> {
         return Ok(xdp_action::XDP_PASS);
     }
 
-    if tcp_dest_port >= 31024 && tcp_dest_port <= 65000 {
+    if (tcp_dest_port >= 31024 && tcp_dest_port <= 65000)
+        && (tcp_source_port == 443 || tcp_source_port == 80)
+    {
+        // save_events(
+        //     ctx,
+        //     source_ip,
+        //     tcp_source_port as u32,
+        //     dest_ip,
+        //     tcp_dest_port as u32,
+        //     xdp_action::XDP_PASS,
+        // );
         return Ok(xdp_action::XDP_PASS);
     }
 
     // // TODO: drop
     // let dest_ip =
     //     u32::from_be(unsafe { *ptr_at_result(ctx, ETH_HDR_LEN + offset_of!(iphdr, daddr))? });
-
-    // save_events(
-    //     ctx,
-    //     source_ip,
-    //     tcp_source_port as u32,
-    //     dest_ip,
-    //     tcp_dest_port as u32,
-    //     xdp_action::XDP_DROP,
-    // );
 
     info!(
         ctx,

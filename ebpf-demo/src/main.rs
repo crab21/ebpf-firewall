@@ -12,9 +12,9 @@ use aya::util::online_cpus;
 use aya::{include_bytes_aligned, Bpf};
 use aya_log::BpfLogger;
 use bytes::BytesMut;
-use clap::Parser;
+use clap::{Parser, ArgAction};
 use ebpf_demo_common::PacketLog;
-use log::{info, warn};
+use log::{info, warn, debug};
 use tokio::{signal, task};
 
 #[derive(Debug, Parser)]
@@ -23,6 +23,8 @@ struct Opt {
     iface: String,
     #[arg(short, long, default_value = "false")]
     udp_disable: bool,
+    #[arg(short, long, default_value = "1")]
+    action: u32,
 }
 
 #[tokio::main]
@@ -73,20 +75,6 @@ async fn main() -> Result<(), anyhow::Error> {
         info!("ip_white: {:?}", v);
     }
     // ******************dns ip **********************
-    let dns_vec: Vec<String> = vec![
-        "1.1.1.1".to_string(),
-        "1.1.1.2".to_string(),
-        "1.0.0.1".to_string(),
-        "8.8.8.8".to_string(),
-        "8.8.4.4".to_string(),
-    ];
-    let mut dns_ips: HashMap<_, u32, u32> = HashMap::try_from(bpf.map_mut("BLOCKLIST_DNS")?)?;
-    for vv in dns_vec {
-        let v = vv.trim();
-        let tmp: Result<Ipv4Addr, _> = v.parse();
-        let tmpp = tmp.unwrap().try_into()?;
-        dns_ips.insert(tmpp, 0, 0)?;
-    }
 
     let mut perf_array = AsyncPerfEventArray::try_from(bpf.map_mut("EVENTS")?)?;
 
@@ -114,8 +102,8 @@ async fn main() -> Result<(), anyhow::Error> {
                     let src_addr = net::Ipv4Addr::from(data.ipv4_address);
                     let dst_addr = net::Ipv4Addr::from(data.dest_address);
                     //
-                    if data.action == 1 {
-                        info!(
+                    if data.action == opt.action {
+                        debug!(
                             "LOG: SRC {}-{} dst {}-{}, ACTION {}",
                             src_addr, data.source_port, dst_addr, data.dest_port, data.action
                         );
