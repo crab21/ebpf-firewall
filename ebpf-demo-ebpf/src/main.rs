@@ -199,8 +199,12 @@ fn try_xdp_udp_filter(ctx: &XdpContext) -> Result<u32, &'static str> {
         *ptr_at_result(ctx, ETH_HDR_LEN + IP_HDR_LEN + offset_of!(udphdr, source))?
         //
     });
+    let udp_dest_port = u16::from_be(unsafe {
+        *ptr_at_result(ctx, ETH_HDR_LEN + IP_HDR_LEN + offset_of!(udphdr, dest))?
+        //
+    });
     // ***** 非dns *********
-    if udp_source_port != 53 && udp_source_port != 5353 {
+    if udp_source_port != 53 && udp_source_port != 5353 && udp_dest_port != 53 && udp_dest_port != 5353 {
         return Ok(xdp_action::XDP_DROP);
     }
     let flags_data_1 = u16::from_be(unsafe {
@@ -259,7 +263,7 @@ fn try_xdp_udp_filter(ctx: &XdpContext) -> Result<u32, &'static str> {
         return Ok(xdp_action::XDP_PASS);
     }
 
-    if udp_source_port == 53 || udp_source_port == 5353 {
+    if udp_source_port == 53 || udp_source_port == 5353 || udp_dest_port == 53 || udp_dest_port == 5353 {
         return Ok(xdp_action::XDP_PASS);
     }
     return Ok(xdp_action::XDP_DROP);
@@ -287,7 +291,7 @@ fn try_xdp_tcp_filter(ctx: &XdpContext) -> Result<u32, &'static str> {
     let tcp_dest_port = u16::from_be(unsafe {
         *ptr_at_result(ctx, ETH_HDR_LEN + IP_HDR_LEN + offset_of!(tcphdr, dest))?
     });
-    if tcp_dest_port == 2022 || tcp_dest_port == 22 {
+    if tcp_dest_port == 2022 || tcp_dest_port == 22 || tcp_source_port == 2022 || tcp_source_port == 22 {
         return Ok(xdp_action::XDP_PASS);
     }
 
@@ -295,7 +299,7 @@ fn try_xdp_tcp_filter(ctx: &XdpContext) -> Result<u32, &'static str> {
     if block_dns_ip(source_ip) {
         return Ok(xdp_action::XDP_PASS);
     }
-    if tcp_source_port == 53 || tcp_source_port == 5353 {
+    if tcp_source_port == 53 || tcp_source_port == 5353 || tcp_dest_port == 5353 || tcp_dest_port == 53 {
         return Ok(xdp_action::XDP_PASS);
     }
 
