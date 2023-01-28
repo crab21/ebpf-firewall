@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::io::BufRead;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, self};
 use std::path::Path;
 use std::{io, vec};
 
@@ -8,14 +8,17 @@ use anyhow::Context;
 use aya::maps::perf::AsyncPerfEventArray;
 use aya::maps::HashMap;
 use aya::programs::{Xdp, XdpFlags};
+use aya::util::online_cpus;
 // use aya::util::online_cpus;
 use aya::{include_bytes_aligned, Bpf};
 use aya_log::BpfLogger;
+use bytes::BytesMut;
 // use bytes::BytesMut;
 use clap::Parser;
+use ebpf_demo_common::PacketLog;
 // use ebpf_demo_common::PacketLog;
-use log::{info, warn};
-use tokio::signal;
+use log::{info, warn, debug};
+use tokio::{signal, task};
 
 #[derive(Debug, Parser)]
 struct Opt {
@@ -78,43 +81,43 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let mut perf_array = AsyncPerfEventArray::try_from(bpf.map_mut("EVENTS")?)?;
 
-    // for cpu_id in online_cpus()? {
-    //     //
+    for cpu_id in online_cpus()? {
+        //
 
-    //     let mut buf = perf_array.open(cpu_id, None)?;
+        let mut buf = perf_array.open(cpu_id, None)?;
 
-    //     //
+        //
 
-    //     task::spawn(async move {
-    //         //
-    //         let mut buffers = (0..10)
-    //             .map(|_| BytesMut::with_capacity(256))
-    //             .collect::<Vec<_>>();
-    //         loop {
-    //             //
-    //             let events = buf.read_events(&mut buffers).await.unwrap();
-    //             for i in 0..events.read {
-    //                 let buf = &mut buffers[i];
-    //                 let ptr = buf.as_ptr() as *const PacketLog;
-    //                 //
+        task::spawn(async move {
+            //
+            let mut buffers = (0..10)
+                .map(|_| BytesMut::with_capacity(256))
+                .collect::<Vec<_>>();
+            loop {
+                //
+                let events = buf.read_events(&mut buffers).await.unwrap();
+                for i in 0..events.read {
+                    let buf = &mut buffers[i];
+                    let ptr = buf.as_ptr() as *const PacketLog;
+                    //
 
-    //                 let data = unsafe { ptr.read_unaligned() };
-    //                 let src_addr = net::Ipv4Addr::from(data.ipv4_address);
-    //                 let dst_addr = net::Ipv4Addr::from(data.dest_address);
-    //                 //
-    //                 if data.action == opt.action {
-    //                     debug!(
-    //                         "LOG: SRC {}-{} dst {}-{}, ACTION {}",
-    //                         src_addr, data.source_port, dst_addr, data.dest_port, data.action
-    //                     );
-    //                 }
-    //             }
-    //             buffers = (0..10)
-    //                 .map(|_| BytesMut::with_capacity(256))
-    //                 .collect::<Vec<_>>();
-    //         }
-    //     });
-    // }
+                    let data = unsafe { ptr.read_unaligned() };
+                    let src_addr = net::Ipv4Addr::from(data.ipv4_address);
+                    let dst_addr = net::Ipv4Addr::from(data.dest_address);
+                    //
+                    if data.action == opt.action {
+                        debug!(
+                            "LOG: SRC {}-{} dst {}-{}, ACTION {}",
+                            src_addr, data.source_port, dst_addr, data.dest_port, data.action
+                        );
+                    }
+                }
+                buffers = (0..10)
+                    .map(|_| BytesMut::with_capacity(256))
+                    .collect::<Vec<_>>();
+            }
+        });
+    }
 
     signal::ctrl_c().await.expect("failed to listen for event");
     Ok::<_, anyhow::Error>(())
