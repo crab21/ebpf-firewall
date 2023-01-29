@@ -252,18 +252,18 @@ fn try_xdp_udp_filter(ctx: &XdpContext) -> Result<u32, &'static str> {
         *ptr_at_result(ctx, ETH_HDR_LEN + offset_of!(iphdr, id))? //
     });
     // ****************** dns 防止污染 *********************start>>>>
-    // if id is 0.
-    if ip_id == 0 {
-        return Ok(xdp_action::XDP_DROP);
-    }
-    let ip_frag_off = u16::from_be(unsafe {
-        *ptr_at_result(ctx, ETH_HDR_LEN + offset_of!(iphdr, frag_off))? //
-    });
-    // if flag is 0x40(don't fragment)
-    if ip_frag_off == 0x0040 {
-        info!(ctx, "don't fragment: {}", ip_frag_off);
-        return Ok(xdp_action::XDP_DROP);
-    }
+    // // if id is 0.
+    // if ip_id == 0 {
+    //     return Ok(xdp_action::XDP_DROP);
+    // }
+    // let ip_frag_off = u16::from_be(unsafe {
+    //     *ptr_at_result(ctx, ETH_HDR_LEN + offset_of!(iphdr, frag_off))? //
+    // });
+    // // if flag is 0x40(don't fragment)
+    // if ip_frag_off == 0x0040 {
+    //     info!(ctx, "don't fragment: {}", ip_frag_off);
+    //     return Ok(xdp_action::XDP_DROP);
+    // }
     // // drop if dns flag has Authoritative mark
     // if (data_flags[2] & 0b0000_0100) != 0 {
     //     info!(ctx, "Authoritative mark:{}", data_flags[2]);
@@ -322,14 +322,7 @@ fn try_xdp_tcp_filter(ctx: &XdpContext) -> Result<u32, &'static str> {
     }
 
     // ********* only dns udp 53/5353
-    if block_dns_ip(source_ip) {
-        return Ok(xdp_action::XDP_PASS);
-    }
-    if tcp_source_port == 53
-        || tcp_source_port == 5353
-        || tcp_dest_port == 5353
-        || tcp_dest_port == 53
-    {
+    if block_dns_ip(source_ip) || block_dns_ip(dest_ip) {
         return Ok(xdp_action::XDP_PASS);
     }
 
@@ -368,14 +361,6 @@ fn try_xdp_tcp_filter(ctx: &XdpContext) -> Result<u32, &'static str> {
         return Ok(xdp_action::XDP_DROP);
     }
 
-    if block_ip(dest_ip) {
-        return Ok(xdp_action::XDP_PASS);
-    }
-
-    if block_ip(source_ip) {
-        return Ok(xdp_action::XDP_PASS);
-    }
-
     if tcp_dest_port >= 31024 && tcp_dest_port <= 65000 {
         return Ok(xdp_action::XDP_PASS);
     }
@@ -395,7 +380,7 @@ fn try_xdp_tcp_filter(ctx: &XdpContext) -> Result<u32, &'static str> {
         tcp_source_port as u32,
         dest_ip,
         tcp_dest_port as u32,
-        xdp_action::XDP_PASS,
+        xdp_action::XDP_DROP,
     );
     return Ok(xdp_action::XDP_DROP);
 }
@@ -430,28 +415,28 @@ fn try_xdp_tcp_flags_filter(
     //     return xdp_action::XDP_DROP;
     // }
 
-    // syn rst ->1
-    if tcphdr_st_manual & 0b0000_0110 == 0b0000_0110 {
-        return xdp_action::XDP_DROP;
-    }
-
-    // fin rst ->1
-    if tcphdr_st_manual & 0b0000_0101 == 0b0000_0101 {
-        return xdp_action::XDP_DROP;
-    }
-
-    // psh fin urg ->1
-    if tcphdr_st_manual & 0b0010_1001 == 0b0010_1001 {
-        return xdp_action::XDP_DROP;
-    }
-    // // **only fin ->1
-    // if tcphdr_st_manual | 0b0000_0001 == 0b0000_0001 {
+    // // syn rst ->1
+    // if tcphdr_st_manual & 0b0000_0110 == 0b0000_0110 {
     //     return xdp_action::XDP_DROP;
     // }
-    // **only urg->1
-    if tcphdr_st_manual | 0b0010_0000 == 0b0010_0000 {
-        return xdp_action::XDP_DROP;
-    }
+
+    // // fin rst ->1
+    // if tcphdr_st_manual & 0b0000_0101 == 0b0000_0101 {
+    //     return xdp_action::XDP_DROP;
+    // }
+
+    // // psh fin urg ->1
+    // if tcphdr_st_manual & 0b0010_1001 == 0b0010_1001 {
+    //     return xdp_action::XDP_DROP;
+    // }
+    // // // **only fin ->1
+    // // if tcphdr_st_manual | 0b0000_0001 == 0b0000_0001 {
+    // //     return xdp_action::XDP_DROP;
+    // // }
+    // // **only urg->1
+    // if tcphdr_st_manual | 0b0010_0000 == 0b0010_0000 {
+    //     return xdp_action::XDP_DROP;
+    // }
 
     // // **only psh ->1
     // if tcphdr_st_manual | 0b0000_1000 == 0b0000_1000 {
