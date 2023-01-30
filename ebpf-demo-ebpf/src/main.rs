@@ -173,6 +173,16 @@ fn try_xdp_icmp_filter(ctx: &XdpContext) -> Result<u32, &'static str> {
     });
     // drop icmp and icmpv6
     if ip_proto == IPPROTO_ICMP || ip_proto == IPPROTO_ICMPV6 {
+        let source_ip =
+            u32::from_be(unsafe { *ptr_at_result(ctx, ETH_HDR_LEN + offset_of!(iphdr, saddr))? });
+        let target_ip =
+            u32::from_be(unsafe { *ptr_at_result(ctx, ETH_HDR_LEN + offset_of!(iphdr, daddr))? });
+
+        // ********* only dns udp 53/5353
+        if block_dns_ip(source_ip) || block_dns_ip(target_ip) {
+            return Ok(xdp_action::XDP_PASS);
+        }
+        
         return Ok(xdp_action::XDP_DROP);
     }
     Ok(xdp_action::XDP_ABORTED)
@@ -202,6 +212,17 @@ fn try_xdp_udp_filter(ctx: &XdpContext) -> Result<u32, &'static str> {
         *ptr_at_result(ctx, ETH_HDR_LEN + IP_HDR_LEN + offset_of!(udphdr, dest))?
         //
     });
+
+    let source_ip =
+        u32::from_be(unsafe { *ptr_at_result(ctx, ETH_HDR_LEN + offset_of!(iphdr, saddr))? });
+    let target_ip =
+        u32::from_be(unsafe { *ptr_at_result(ctx, ETH_HDR_LEN + offset_of!(iphdr, daddr))? });
+
+    // ********* only dns udp 53/5353
+    if block_dns_ip(source_ip) || block_dns_ip(target_ip) {
+        return Ok(xdp_action::XDP_PASS);
+    }
+
     // ***** 非dns *********
     if udp_source_port != 53
         && udp_source_port != 5353
@@ -270,16 +291,6 @@ fn try_xdp_udp_filter(ctx: &XdpContext) -> Result<u32, &'static str> {
     //     return Ok(xdp_action::XDP_DROP);
     // }
     // ****************** dns 防止污染 *********************end<<<<
-
-    let source_ip =
-        u32::from_be(unsafe { *ptr_at_result(ctx, ETH_HDR_LEN + offset_of!(iphdr, saddr))? });
-    let target_ip =
-        u32::from_be(unsafe { *ptr_at_result(ctx, ETH_HDR_LEN + offset_of!(iphdr, daddr))? });
-
-    // ********* only dns udp 53/5353
-    if block_dns_ip(source_ip) || block_dns_ip(target_ip) {
-        return Ok(xdp_action::XDP_PASS);
-    }
 
     if udp_source_port == 53
         || udp_source_port == 5353
@@ -361,7 +372,7 @@ fn try_xdp_tcp_filter(ctx: &XdpContext) -> Result<u32, &'static str> {
         return Ok(xdp_action::XDP_DROP);
     }
 
-    if tcp_dest_port >= 31024 && tcp_dest_port <= 65000 {
+    if tcp_dest_port >= 10000 && tcp_dest_port <= 65000 {
         return Ok(xdp_action::XDP_PASS);
     }
 
