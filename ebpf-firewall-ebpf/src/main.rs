@@ -19,7 +19,7 @@ use core::{
     borrow::{Borrow, BorrowMut},
     mem, slice, u8,
 };
-use ebpf_demo_common::PacketLog;
+use ebpf_firewall_common::PacketLog;
 use memoffset::offset_of;
 
 use crate::bindings::udphdr;
@@ -39,8 +39,8 @@ const IP_HDR_LEN: usize = mem::size_of::<iphdr>();
 const TCP_HDR_LEN: usize = mem::size_of::<tcphdr>();
 const UDP_HDR_LEN: usize = mem::size_of::<udphdr>();
 
-#[xdp(name = "ebpf_demo")]
-pub fn ebpf_demo(ctx: XdpContext) -> u32 {
+#[xdp(name = "ebpf_firewall")]
+pub fn ebpf_firewall(ctx: XdpContext) -> u32 {
     match try_xdp_firewall(ctx) {
         Ok(ret) => ret,
         Err(e) => xdp_action::XDP_PASS,

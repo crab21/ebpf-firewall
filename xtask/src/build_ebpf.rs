@@ -41,7 +41,7 @@ pub struct Options {
 }
 
 pub fn build_ebpf(opts: Options) -> Result<(), anyhow::Error> {
-    let dir = PathBuf::from("ebpf-demo-ebpf");
+    let dir = PathBuf::from("ebpf-firewall-ebpf");
     let target = format!("--target={}", opts.target);
     let mut args = vec![
         "+nightly",

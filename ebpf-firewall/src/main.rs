@@ -1,6 +1,6 @@
 use std::fs::File;
 use std::io::BufRead;
-use std::net::{Ipv4Addr, self};
+use std::net::{self, Ipv4Addr};
 use std::path::Path;
 use std::{io, vec};
 
@@ -15,9 +15,9 @@ use aya_log::BpfLogger;
 use bytes::BytesMut;
 // use bytes::BytesMut;
 use clap::Parser;
-use ebpf_demo_common::PacketLog;
-// use ebpf_demo_common::PacketLog;
-use log::{info, warn, debug};
+use ebpf_firewall_common::PacketLog;
+// use ebpf_firewall_common::PacketLog;
+use log::{debug, info, warn};
 use tokio::{signal, task};
 
 #[derive(Debug, Parser)]
@@ -42,17 +42,17 @@ async fn main() -> Result<(), anyhow::Error> {
     // reach for `Bpf::load_file` instead.
     #[cfg(debug_assertions)]
     let mut bpf = Bpf::load(include_bytes_aligned!(
-        "../../target/bpfel-unknown-none/debug/ebpf-demo"
+        "../../target/bpfel-unknown-none/debug/ebpf-firewall"
     ))?;
     #[cfg(not(debug_assertions))]
     let mut bpf = Bpf::load(include_bytes_aligned!(
-        "../../target/bpfel-unknown-none/release/ebpf-demo"
+        "../../target/bpfel-unknown-none/release/ebpf-firewall"
     ))?;
     if let Err(e) = BpfLogger::init(&mut bpf) {
         // This can happen if you remove all log statements from your eBPF program.
         warn!("failed to initialize eBPF logger: {}", e);
     }
-    let program: &mut Xdp = bpf.program_mut("ebpf_demo").unwrap().try_into()?;
+    let program: &mut Xdp = bpf.program_mut("ebpf_firewall").unwrap().try_into()?;
     program.load()?;
     program.attach(&opt.iface, XdpFlags::DRV_MODE)
         .context("failed to attach the XDP program with default flags - try changing XdpFlags::default() to XdpFlags::SKB_MODE")?;

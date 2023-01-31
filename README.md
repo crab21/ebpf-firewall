@@ -1,4 +1,4 @@
-# ebpf-demo
+# ebpf-firewall
 
 ## Prerequisites
 
@@ -26,4 +26,4 @@ cargo build
 ```bash
 RUST_LOG=info cargo xtask run
 ```
-# ebpf-demo
+# ebpf-firewall

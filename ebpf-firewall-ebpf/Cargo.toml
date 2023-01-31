@@ -1,16 +1,16 @@
 [package]
-name = "ebpf-demo-ebpf"
+name = "ebpf-firewall-ebpf"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 aya-bpf = { git = "https://github.com/aya-rs/aya", branch = "main" }
 aya-log-ebpf = { git = "https://github.com/aya-rs/aya", branch = "main" }
-ebpf-demo-common = { path = "../ebpf-demo-common" }
+ebpf-firewall-common = { path = "../ebpf-firewall-common" }
 memoffset = "0.6"
 
 [[bin]]
-name = "ebpf-demo"
+name = "ebpf-firewall"
 path = "src/main.rs"
 
 [profile.dev]

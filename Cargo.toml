@@ -1,2 +1,2 @@
 [workspace]
-members = ["ebpf-demo", "ebpf-demo-common", "xtask"]
+members = ["ebpf-firewall", "ebpf-firewall-common", "xtask"]
