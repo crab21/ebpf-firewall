@@ -22,7 +22,7 @@ use core::{
 use ebpf_demo_common::PacketLog;
 use memoffset::offset_of;
 
-use crate::bindings::{arphdr, udphdr};
+use crate::bindings::udphdr;
 
 const IPPROTO_UDP: u8 = 0x0011;
 const IPPROTO_TCP: u8 = 6;
@@ -81,9 +81,11 @@ static mut BLOCKLIST: HashMap<u32, u32> = HashMap::<u32, u32>::with_max_entries(
 #[map(name = "CONFIG")] //
 static mut CONFIG: HashMap<u32, u32> = HashMap::<u32, u32>::with_max_entries(12, 0);
 
+#[inline(always)]
 fn block_ip(address: u32) -> bool {
     unsafe { BLOCKLIST.get(&address).is_some() }
 }
+#[inline(always)]
 fn block_dns_ip(address: u32) -> bool {
     block_ip(address)
 }
@@ -91,6 +93,7 @@ fn config_info(address: u32) -> bool {
     unsafe { CONFIG.get(&address).is_some() }
 }
 
+#[inline(always)]
 fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, &'static str> {
     let mut action: u32;
     let h_proto = u16::from_be(unsafe {
@@ -123,6 +126,7 @@ fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, &'static str> {
     } else if action == xdp_action::XDP_DROP {
         return Ok(action);
     }
+
     action = try_xdp_tcp_filter(&ctx)?;
     if action == xdp_action::XDP_PASS {
         return Ok(action);
@@ -147,48 +151,42 @@ unsafe fn ptr_at_result<T>(ctx: &XdpContext, offset: usize) -> Result<*const T, 
     Ok((start + offset) as *const T)
 }
 
-fn save_events(
-    ctx: &XdpContext,
-    source: u32,
-    source_port: u32,
-    dst_addr: u32,
-    d_port: u32,
-    action: u32,
-) {
-    let log_entry = PacketLog {
-        ipv4_address: source,
-        source_port: source_port,
-        dest_address: dst_addr,
-        dest_port: d_port,
-        action: action,
-    };
-    unsafe {
-        EVENTS.output(ctx, &log_entry, 0); //
-    }
-}
+// #[inline(always)]
+// fn save_events(
+//     ctx: &XdpContext,
+//     source: u32,
+//     source_port: u32,
+//     dst_addr: u32,
+//     d_port: u32,
+//     action: u32,
+// ) {
+//     let log_entry = PacketLog {
+//         ipv4_address: source,
+//         source_port: source_port,
+//         dest_address: dst_addr,
+//         dest_port: d_port,
+//         action: action,
+//     };
+//     unsafe {
+//         EVENTS.output(ctx, &log_entry, 0); //
+//     }
+// }
 
+#[inline(always)]
 fn try_xdp_icmp_filter(ctx: &XdpContext) -> Result<u32, &'static str> {
     let ip_proto = u8::from_be(unsafe {
         *ptr_at_result(ctx, ETH_HDR_LEN + offset_of!(iphdr, protocol))? //
     });
     // drop icmp and icmpv6
     if ip_proto == IPPROTO_ICMP || ip_proto == IPPROTO_ICMPV6 {
-        let source_ip =
-            u32::from_be(unsafe { *ptr_at_result(ctx, ETH_HDR_LEN + offset_of!(iphdr, saddr))? });
-        let target_ip =
-            u32::from_be(unsafe { *ptr_at_result(ctx, ETH_HDR_LEN + offset_of!(iphdr, daddr))? });
-
-        // ********* only dns udp 53/5353
-        if block_dns_ip(source_ip) || block_dns_ip(target_ip) {
-            return Ok(xdp_action::XDP_PASS);
-        }
-        
         return Ok(xdp_action::XDP_DROP);
     }
     Ok(xdp_action::XDP_ABORTED)
 }
 
 // dns udp
+// deprecated, recommand `tcp` or `DOH` for dns lookup.
+#[inline(always)]
 fn try_xdp_udp_filter(ctx: &XdpContext) -> Result<u32, &'static str> {
     let ip_proto = u8::from_be(unsafe {
         *ptr_at_result(ctx, ETH_HDR_LEN + offset_of!(iphdr, protocol))? //
@@ -204,15 +202,6 @@ fn try_xdp_udp_filter(ctx: &XdpContext) -> Result<u32, &'static str> {
         return Ok(xdp_action::XDP_DROP);
     }
 
-    let udp_source_port = u16::from_be(unsafe {
-        *ptr_at_result(ctx, ETH_HDR_LEN + IP_HDR_LEN + offset_of!(udphdr, source))?
-        //
-    });
-    let udp_dest_port = u16::from_be(unsafe {
-        *ptr_at_result(ctx, ETH_HDR_LEN + IP_HDR_LEN + offset_of!(udphdr, dest))?
-        //
-    });
-
     let source_ip =
         u32::from_be(unsafe { *ptr_at_result(ctx, ETH_HDR_LEN + offset_of!(iphdr, saddr))? });
     let target_ip =
@@ -223,56 +212,29 @@ fn try_xdp_udp_filter(ctx: &XdpContext) -> Result<u32, &'static str> {
         return Ok(xdp_action::XDP_PASS);
     }
 
+    let udp_source_port = u16::from_be(unsafe {
+        *ptr_at_result(ctx, ETH_HDR_LEN + IP_HDR_LEN + offset_of!(udphdr, source))?
+        //
+    });
+    let udp_dest_port = u16::from_be(unsafe {
+        *ptr_at_result(ctx, ETH_HDR_LEN + IP_HDR_LEN + offset_of!(udphdr, dest))?
+        //
+    });
+
     // ***** 非dns *********
     if udp_source_port != 53
         && udp_source_port != 5353
         && udp_dest_port != 53
         && udp_dest_port != 5353
     {
-        let saddr = u32::from_be(unsafe {
-            *ptr_at_result(ctx, ETH_HDR_LEN + offset_of!(iphdr, saddr))? //
-        });
-        let daddr = u32::from_be(unsafe {
-            *ptr_at_result(ctx, ETH_HDR_LEN + offset_of!(iphdr, daddr))? //
-        });
         info!(ctx, "udp:  {}-{}", udp_source_port, udp_dest_port);
-        save_events(
-            ctx,
-            saddr,
-            udp_source_port as u32,
-            daddr,
-            udp_dest_port as u32,
-            xdp_action::XDP_DROP,
-        );
         return Ok(xdp_action::XDP_DROP);
     }
-    let flags_data_1 = u16::from_be(unsafe {
-        *ptr_at_result(ctx, ETH_HDR_LEN + IP_HDR_LEN + UDP_HDR_LEN + 2)?
-        //
-    });
-    let data_flags = unsafe {
-        slice::from_raw_parts(
-            (ctx.data() + ETH_HDR_LEN + IP_HDR_LEN + UDP_HDR_LEN) as *const u8,
-            10,
-        )
-    };
-    // 0011_1110 0000_0110
-    // 1000_0001 1000_0000
-    // 1000_0001
-    // info!(
-    //     ctx,
-    //     "flags.1->{} eth:{} ip:{} udp:{} offset_udp:{} gg:{}",
-    //     flags_data_1,
-    //     ETH_HDR_LEN,
-    //     IP_HDR_LEN,
-    //     UDP_HDR_LEN,
-    //     offset_of!(iphdr, protocol),
-    //     data_flags[2],
-    // );
-    let ip_id = u16::from_be(unsafe {
-        *ptr_at_result(ctx, ETH_HDR_LEN + offset_of!(iphdr, id))? //
-    });
+
     // ****************** dns 防止污染 *********************start>>>>
+    // let ip_id = u16::from_be(unsafe {
+    //      *ptr_at_result(ctx, ETH_HDR_LEN + offset_of!(iphdr, id))? //
+    // });
     // // if id is 0.
     // if ip_id == 0 {
     //     return Ok(xdp_action::XDP_DROP);
@@ -302,10 +264,12 @@ fn try_xdp_udp_filter(ctx: &XdpContext) -> Result<u32, &'static str> {
     return Ok(xdp_action::XDP_DROP);
 }
 
+#[inline(always)]
 fn try_xdp_tcp_filter(ctx: &XdpContext) -> Result<u32, &'static str> {
     let ip_proto = u8::from_be(unsafe {
         *ptr_at_result(ctx, ETH_HDR_LEN + offset_of!(iphdr, protocol))? //
     });
+    // ******************only tcp **********************
     // 非tcp不处理
     if ip_proto != IPPROTO_TCP {
         return Ok(xdp_action::XDP_DROP);
@@ -317,7 +281,6 @@ fn try_xdp_tcp_filter(ctx: &XdpContext) -> Result<u32, &'static str> {
     let dest_ip =
         u32::from_be(unsafe { *ptr_at_result(ctx, ETH_HDR_LEN + offset_of!(iphdr, daddr))? });
 
-    // ******************only tcp **********************
     let tcp_source_port = u16::from_be(unsafe {
         *ptr_at_result(ctx, ETH_HDR_LEN + IP_HDR_LEN + offset_of!(tcphdr, source))?
     });
@@ -337,37 +300,16 @@ fn try_xdp_tcp_filter(ctx: &XdpContext) -> Result<u32, &'static str> {
         return Ok(xdp_action::XDP_PASS);
     }
 
-    // drop `RST` package
-    // let tcphdr_st = tcphdr::from(unsafe { *ptr_at_result(ctx, ETH_HDR_LEN + IP_HDR_LEN)? });
-    // let urg = tcphdr_st.urg();
-    // let ack = tcphdr_st.ack();
-    // let psh = tcphdr_st.psh();
-    // let rst = tcphdr_st.rst();
-    // let syn = tcphdr_st.syn();
-    // let fin = tcphdr_st.fin();
-    // info!(
-    //     ctx,
-    //     "urg:{} ack:{} psh:{} rst:{} syn: {} fin:{}", urg, ack, psh, rst, syn, fin
-    // );
-    let window_size = u16::from_be(unsafe { *ptr_at_result(ctx, ETH_HDR_LEN + IP_HDR_LEN + 14)? });
-    // info!(ctx, "window_size------------------>{}", window_size);
-
     let tcphdr_st_manual =
         u8::from_be(unsafe { *ptr_at_result(ctx, ETH_HDR_LEN + IP_HDR_LEN + 13)? });
-    // info!(ctx, "manual------------------>{}", tcphdr_st_manual);
 
     let ip_flags = u8::from_be(unsafe { *ptr_at_result(ctx, ETH_HDR_LEN + 6)? });
 
     // tcp [URG、ACK、PSH、RST、SYN、FIN] check
-    if try_xdp_tcp_flags_filter(ctx, tcphdr_st_manual, window_size, ip_flags)
-        == xdp_action::XDP_DROP
-    {
+    if try_xdp_tcp_flags_filter(tcphdr_st_manual, ip_flags) == xdp_action::XDP_DROP {
         info!(
             ctx,
-            "tcphdr_st_manual:{} window_size:{} ip_flags:{}",
-            tcphdr_st_manual,
-            window_size,
-            ip_flags
+            "tcphdr_st_manual:{} ip_flags:{}", tcphdr_st_manual, ip_flags
         );
         return Ok(xdp_action::XDP_DROP);
     }
@@ -375,24 +317,6 @@ fn try_xdp_tcp_filter(ctx: &XdpContext) -> Result<u32, &'static str> {
     if tcp_dest_port >= 10000 && tcp_dest_port <= 65000 {
         return Ok(xdp_action::XDP_PASS);
     }
-
-    // // TODO: drop
-    // let dest_ip =
-    //     u32::from_be(unsafe { *ptr_at_result(ctx, ETH_HDR_LEN + offset_of!(iphdr, daddr))? });
-
-    info!(
-        ctx,
-        "drop sourceport:{} destport:{}", tcp_source_port, tcp_dest_port
-    );
-
-    save_events(
-        ctx,
-        source_ip,
-        tcp_source_port as u32,
-        dest_ip,
-        tcp_dest_port as u32,
-        xdp_action::XDP_DROP,
-    );
     return Ok(xdp_action::XDP_DROP);
 }
 
@@ -406,12 +330,21 @@ unsafe fn ptr_after<T, U>(prev: *const T) -> Result<*const U, &'static str> {
     ptr_at(prev as usize + mem::size_of::<T>())
 }
 
-fn try_xdp_tcp_flags_filter(
-    ctx: &XdpContext,
-    tcphdr_st_manual: u8,
-    window_size: u16,
-    ip_flags: u8,
-) -> u32 {
+//
+// drop `RST` package
+// let tcphdr_st = tcphdr::from(unsafe { *ptr_at_result(ctx, ETH_HDR_LEN + IP_HDR_LEN)? });
+// let urg = tcphdr_st.urg();
+// let ack = tcphdr_st.ack();
+// let psh = tcphdr_st.psh();
+// let rst = tcphdr_st.rst();
+// let syn = tcphdr_st.syn();
+// let fin = tcphdr_st.fin();
+// info!(
+//     ctx,
+//     "urg:{} ack:{} psh:{} rst:{} syn: {} fin:{}", urg, ack, psh, rst, syn, fin
+// );
+#[inline(always)]
+fn try_xdp_tcp_flags_filter(tcphdr_st_manual: u8, _: u8) -> u32 {
     //全为1
     if tcphdr_st_manual & 0b0011_1111 == 0b0011_1111 {
         return xdp_action::XDP_DROP;
