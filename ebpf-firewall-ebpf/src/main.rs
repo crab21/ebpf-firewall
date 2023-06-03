@@ -11,7 +11,7 @@ use aya_bpf::{
     maps::{HashMap, PerfEventArray},
     programs::XdpContext,
 };
-use aya_bpf::{bindings::xdp_action::XDP_DROP, programs::xdp};
+use aya_bpf::{bindings::xdp_action::XDP_PASS, programs::xdp};
 mod bindings;
 use aya_log_ebpf::{debug, error, info};
 use bindings::{ethhdr, iphdr, tcphdr};
@@ -19,7 +19,7 @@ use core::{
     borrow::{Borrow, BorrowMut},
     mem, slice, u8,
 };
-use ebpf_firewall_common::PacketLog;
+use ebpf_firewall_common::{BackendPorts, PacketLog};
 use memoffset::offset_of;
 
 use crate::bindings::udphdr;
@@ -65,9 +65,15 @@ fn ptr_att<T>(ctx: &XdpContext, offset: usize) -> Option<*const T> {
     Some((start + offset) as *const T)
 }
 
+// #[inline(always)]
+// fn ptr_at_mut<T>(ctx: &XdpContext, offset: usize) -> Option<*mut T> {
+//     let ptr = ptr_att::<T>(ctx, offset)?;
+//     Some(ptr as *mut T)
+// }
+
 #[inline(always)]
 fn ptr_at_mut<T>(ctx: &XdpContext, offset: usize) -> Option<*mut T> {
-    let ptr = ptr_att::<T>(ctx, offset)?;
+    let ptr = ptr_at::<T>(ctx, offset)?;
     Some(ptr as *mut T)
 }
 // =======================
@@ -76,7 +82,8 @@ static mut EVENTS: PerfEventArray<PacketLog> =
     PerfEventArray::<PacketLog>::with_max_entries(2560, 0);
 
 #[map(name = "BLOCKLIST")] //
-static mut BLOCKLIST: HashMap<u32, u32> = HashMap::<u32, u32>::with_max_entries(5120, 0);
+static mut BLOCKLIST: HashMap<u32, BackendPorts> =
+    HashMap::<u32, BackendPorts>::with_max_entries(5120, 0);
 
 #[map(name = "CONFIG")] //
 static mut CONFIG: HashMap<u32, u32> = HashMap::<u32, u32>::with_max_entries(12, 0);
@@ -89,6 +96,7 @@ fn block_ip(address: u32) -> bool {
 fn block_dns_ip(address: u32) -> bool {
     block_ip(address)
 }
+
 fn config_info(address: u32) -> bool {
     unsafe { CONFIG.get(&address).is_some() }
 }
@@ -102,7 +110,7 @@ fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, &'static str> {
 
     // drop if id is 0 and drop ipv6
     if h_proto == 0 || h_proto == ETH_P_IPV6 {
-        return Ok(xdp_action::XDP_DROP);
+        return Ok(xdp_action::XDP_PASS);
     }
 
     if h_proto == ETH_P_ARP {
@@ -110,27 +118,27 @@ fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, &'static str> {
     }
 
     if h_proto != ETH_P_IP {
-        return Ok(xdp_action::XDP_DROP);
+        return Ok(xdp_action::XDP_PASS);
     }
 
     action = try_xdp_icmp_filter(&ctx)?;
     if action == xdp_action::XDP_PASS {
         return Ok(action);
-    } else if action == xdp_action::XDP_DROP {
+    } else if action == xdp_action::XDP_PASS {
         return Ok(action);
     }
 
     action = try_xdp_udp_filter(&ctx)?;
     if action == xdp_action::XDP_PASS {
         return Ok(action);
-    } else if action == xdp_action::XDP_DROP {
+    } else if action == xdp_action::XDP_PASS {
         return Ok(action);
     }
 
     action = try_xdp_tcp_filter(&ctx)?;
     if action == xdp_action::XDP_PASS {
         return Ok(action);
-    } else if action == xdp_action::XDP_DROP {
+    } else if action == xdp_action::XDP_PASS {
         return Ok(action);
     }
 
@@ -179,7 +187,7 @@ fn try_xdp_icmp_filter(ctx: &XdpContext) -> Result<u32, &'static str> {
     });
     // drop icmp and icmpv6
     if ip_proto == IPPROTO_ICMP || ip_proto == IPPROTO_ICMPV6 {
-        return Ok(xdp_action::XDP_DROP);
+        return Ok(xdp_action::XDP_PASS);
     }
     Ok(xdp_action::XDP_ABORTED)
 }
@@ -196,72 +204,8 @@ fn try_xdp_udp_filter(ctx: &XdpContext) -> Result<u32, &'static str> {
     if ip_proto != IPPROTO_UDP {
         return Ok(xdp_action::XDP_ABORTED);
     }
-    let udp_enable = config_info(0u32.try_into().unwrap());
-    if udp_enable {
-        info!(ctx, "udp pass: {}", "-------------->drop udp");
-        return Ok(xdp_action::XDP_DROP);
-    }
 
-    let source_ip =
-        u32::from_be(unsafe { *ptr_at_result(ctx, ETH_HDR_LEN + offset_of!(iphdr, saddr))? });
-    let target_ip =
-        u32::from_be(unsafe { *ptr_at_result(ctx, ETH_HDR_LEN + offset_of!(iphdr, daddr))? });
-
-    // ********* only dns udp 53/5353
-    if block_dns_ip(source_ip) || block_dns_ip(target_ip) {
-        return Ok(xdp_action::XDP_PASS);
-    }
-
-    let udp_source_port = u16::from_be(unsafe {
-        *ptr_at_result(ctx, ETH_HDR_LEN + IP_HDR_LEN + offset_of!(udphdr, source))?
-        //
-    });
-    let udp_dest_port = u16::from_be(unsafe {
-        *ptr_at_result(ctx, ETH_HDR_LEN + IP_HDR_LEN + offset_of!(udphdr, dest))?
-        //
-    });
-
-    // ***** 非dns *********
-    if udp_source_port != 53
-        && udp_source_port != 5353
-        && udp_dest_port != 53
-        && udp_dest_port != 5353
-    {
-        info!(ctx, "udp:  {}-{}", udp_source_port, udp_dest_port);
-        return Ok(xdp_action::XDP_DROP);
-    }
-
-    // ****************** dns 防止污染 *********************start>>>>
-    // let ip_id = u16::from_be(unsafe {
-    //      *ptr_at_result(ctx, ETH_HDR_LEN + offset_of!(iphdr, id))? //
-    // });
-    // // if id is 0.
-    // if ip_id == 0 {
-    //     return Ok(xdp_action::XDP_DROP);
-    // }
-    // let ip_frag_off = u16::from_be(unsafe {
-    //     *ptr_at_result(ctx, ETH_HDR_LEN + offset_of!(iphdr, frag_off))? //
-    // });
-    // // if flag is 0x40(don't fragment)
-    // if ip_frag_off == 0x0040 {
-    //     info!(ctx, "don't fragment: {}", ip_frag_off);
-    //     return Ok(xdp_action::XDP_DROP);
-    // }
-    // // drop if dns flag has Authoritative mark
-    // if (data_flags[2] & 0b0000_0100) != 0 {
-    //     info!(ctx, "Authoritative mark:{}", data_flags[2]);
-    //     return Ok(xdp_action::XDP_DROP);
-    // }
-    // ****************** dns 防止污染 *********************end<<<<
-
-    if udp_source_port == 53
-        || udp_source_port == 5353
-        || udp_dest_port == 53
-        || udp_dest_port == 5353
-    {
-        return Ok(xdp_action::XDP_PASS);
-    }
-    return Ok(xdp_action::XDP_DROP);
+    Ok(xdp_action::XDP_PASS)
 }
 
 #[inline(always)]
@@ -272,62 +216,58 @@ fn try_xdp_tcp_filter(ctx: &XdpContext) -> Result<u32, &'static str> {
     // ******************only tcp **********************
     // 非tcp不处理
     if ip_proto != IPPROTO_TCP {
-        return Ok(xdp_action::XDP_DROP);
-    }
-
-    let source_ip =
-        u32::from_be(unsafe { *ptr_at_result(ctx, ETH_HDR_LEN + offset_of!(iphdr, saddr))? });
-
-    let dest_ip =
-        u32::from_be(unsafe { *ptr_at_result(ctx, ETH_HDR_LEN + offset_of!(iphdr, daddr))? });
-
-    let tcp_source_port = u16::from_be(unsafe {
-        *ptr_at_result(ctx, ETH_HDR_LEN + IP_HDR_LEN + offset_of!(tcphdr, source))?
-    });
-    let tcp_dest_port = u16::from_be(unsafe {
-        *ptr_at_result(ctx, ETH_HDR_LEN + IP_HDR_LEN + offset_of!(tcphdr, dest))?
-    });
-    if tcp_dest_port == 2022
-        || tcp_dest_port == 22
-        || tcp_source_port == 2022
-        || tcp_source_port == 22
-    {
         return Ok(xdp_action::XDP_PASS);
     }
 
-    // ********* only dns udp 53/5353
-    if block_dns_ip(source_ip) || block_dns_ip(dest_ip) {
-        return Ok(xdp_action::XDP_PASS);
+    let tcp_instance_result =
+        ptr_at_mut::<tcphdr>(ctx, ETH_HDR_LEN + IP_HDR_LEN).ok_or(xdp_action::XDP_PASS);
+
+    match tcp_instance_result {
+        Ok(s) => {
+            let dport = unsafe { u16::from_be((*s).dest) };
+            // let u32_dport = u32::from(dport);
+
+            let backends = match unsafe { BLOCKLIST.get(&(dport as u32)) } {
+                Some(backends) => {
+                    info!(ctx, "FOUND backends for port");
+                    *backends
+                }
+                None => {
+                    // info!(ctx, "NO backends found for this port");
+                    return Ok(xdp_action::XDP_PASS);
+                }
+            };
+
+            let new_destination_port = backends.ports[backends.index];
+            unsafe { (*s).dest = new_destination_port as u16 };
+
+            info!(
+                ctx,
+                "redirected port {}...... --> to{} {}",
+                dport,
+                new_destination_port as u16,
+                u16::from_be(new_destination_port as u16)
+            );
+        }
+        Err(e) => {
+            // info!(ctx, "redirected port error {} ", e);
+        }
     }
 
-    let tcphdr_st_manual =
-        u8::from_be(unsafe { *ptr_at_result(ctx, ETH_HDR_LEN + IP_HDR_LEN + 13)? });
-
-    let ip_flags = u8::from_be(unsafe { *ptr_at_result(ctx, ETH_HDR_LEN + 6)? });
-
-    // tcp [URG、ACK、PSH、RST、SYN、FIN] check
-    if try_xdp_tcp_flags_filter(tcphdr_st_manual, ip_flags) == xdp_action::XDP_DROP {
-        info!(
-            ctx,
-            "tcphdr_st_manual:{} ip_flags:{}", tcphdr_st_manual, ip_flags
-        );
-        return Ok(xdp_action::XDP_DROP);
-    }
-
-    if tcp_dest_port >= 10000 && tcp_dest_port <= 65000 {
-        return Ok(xdp_action::XDP_PASS);
-    }
-    return Ok(xdp_action::XDP_DROP);
+    return Ok(xdp_action::XDP_PASS);
 }
 
-#[inline]
-unsafe fn ptr_at<U>(addr: usize) -> Result<*const U, &'static str> {
-    Ok(addr as *const U)
-}
+#[inline(always)]
+fn ptr_at<T>(ctx: &XdpContext, offset: usize) -> Option<*const T> {
+    let start = ctx.data();
+    let end = ctx.data_end();
+    let len = mem::size_of::<T>();
 
-#[inline]
-unsafe fn ptr_after<T, U>(prev: *const T) -> Result<*const U, &'static str> {
-    ptr_at(prev as usize + mem::size_of::<T>())
+    if start + offset + len > end {
+        return None;
+    }
+
+    Some((start + offset) as *const T)
 }
 
 //

@@ -15,7 +15,7 @@ use aya_log::BpfLogger;
 use bytes::BytesMut;
 // use bytes::BytesMut;
 use clap::Parser;
-use ebpf_firewall_common::PacketLog;
+use ebpf_firewall_common::{BackendPorts, PacketLog};
 // use ebpf_firewall_common::PacketLog;
 use log::{debug, info, warn};
 use tokio::{signal, task};
@@ -54,7 +54,7 @@ async fn main() -> Result<(), anyhow::Error> {
     }
     let program: &mut Xdp = bpf.program_mut("ebpf_firewall").unwrap().try_into()?;
     program.load()?;
-    program.attach(&opt.iface, XdpFlags::DRV_MODE)
+    program.attach(&opt.iface, XdpFlags::SKB_MODE)
         .context("failed to attach the XDP program with default flags - try changing XdpFlags::default() to XdpFlags::SKB_MODE")?;
 
     let mut config: HashMap<_, u32, u32> = HashMap::try_from(bpf.map_mut("CONFIG")?)?;
@@ -66,17 +66,24 @@ async fn main() -> Result<(), anyhow::Error> {
     }
 
     // tokio================>
-    let mut blocklist: HashMap<_, u32, u32> = HashMap::try_from(bpf.map_mut("BLOCKLIST")?)?;
+    let mut blocklist: HashMap<_, u32, BackendPorts> =
+        HashMap::try_from(bpf.map_mut("BLOCKLIST")?)?;
 
-    //
-    let ip_ww: Vec<String> = read_from_file();
-    for vv in ip_ww {
-        let v = vv.trim();
-        let tmp: Result<Ipv4Addr, _> = v.parse();
-        let tmpp = tmp.unwrap().try_into()?;
-        blocklist.insert(tmpp, 0, 0)?;
-        info!("ip_white: {:?}", v);
-    }
+    // //
+    // let ip_ww: Vec<String> = read_from_file();
+    // for vv in ip_ww {
+    //     let v = vv.trim();
+    //     let tmp: Result<Ipv4Addr, _> = v.parse();
+    //     let tmpp = tmp.unwrap().try_into()?;
+    //     blocklist.insert(tmpp, 0, 0)?;
+    //     info!("ip_white: {:?}", v);
+    // }
+    let mut ports: [u32; 1] = [0; 1];
+    ports[0] = 30010;
+
+    let backend_ports = BackendPorts { ports, index: 0 };
+
+    blocklist.insert(80, backend_ports, 0)?;
     // ******************dns ip **********************
 
     // let mut perf_array = AsyncPerfEventArray::try_from(bpf.map_mut("EVENTS")?)?;
